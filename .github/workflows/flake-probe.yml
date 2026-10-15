@@ -1,0 +1,57 @@
+# A focused probe for one intermittent engine test failure, run on this fork branch so the
+# evidence is public: the same `ci-verification` tree (the PR branch plus only the verification
+# workflow), with the engine suite repeated and the one test that failed once re-run in
+# isolation many times. Nothing else differs.
+name: flake-probe
+on:
+  workflow_dispatch:
+  push:
+    branches: [flake-probe]
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+concurrency:
+  group: flake-probe-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  probe:
+    name: engine suite x10 + single test x100 (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux system dependencies (egui/winit/rfd)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev \
+            libgl1-mesa-dev libgtk-3-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Build the engine test binary once
+        run: cargo test -p vectorcraft-engine --lib tests_ids_without_selection --no-run
+      - name: The one test, alone, 100 times
+        run: |
+          fails=0
+          for i in $(seq 1 100); do
+            if ! cargo test -p vectorcraft-engine --lib tests_ids_without_selection 2>/dev/null | grep -q "test result: ok"; then
+              fails=$((fails+1)); echo "isolated run $i: FAILED"
+            fi
+          done
+          echo "isolated: $fails/100 failed"
+          test $fails -eq 0
+      - name: The full engine suite, 10 times (parallel, as CI runs it)
+        run: |
+          fails=0
+          for i in $(seq 1 10); do
+            if cargo test -p vectorcraft-engine --lib 2>/dev/null | grep -q "test result: FAILED"; then
+              fails=$((fails+1)); echo "suite run $i: FAILED"
+            fi
+          done
+          echo "suite: $fails/10 failed"
+          test $fails -eq 0
